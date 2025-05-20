@@ -1,0 +1,125 @@
+package botaoAcaoTrocaProdutoEmMassa;
+
+import br.com.sankhya.extensions.actionbutton.AcaoRotinaJava;
+import br.com.sankhya.extensions.actionbutton.ContextoAcao;
+import br.com.sankhya.extensions.actionbutton.Registro;
+import br.com.sankhya.jape.vo.DynamicVO;
+import br.com.sankhya.jape.wrapper.JapeFactory;
+import br.com.sankhya.jape.wrapper.JapeWrapper;
+import br.com.sankhya.jape.wrapper.fluid.FluidCreateVO;
+
+import java.math.BigDecimal;
+import java.util.ArrayList;
+
+public class trocarProduto implements AcaoRotinaJava {
+    JapeWrapper ItemNotaDAO = JapeFactory.dao("ItemNota");
+    JapeWrapper ProdutoDAO = JapeFactory.dao("Produto");
+    BigDecimal codigoProdutoOld;
+    BigDecimal quantidadeProdutoOld;
+    BigDecimal sequenciaOld;
+    BigDecimal quantidadeProdutoNew;
+    BigDecimal codigoProdutoNew;
+    BigDecimal quantidadeProporcao;
+    BigDecimal codigoLocal = BigDecimal.valueOf(20000000); // Código do local fixo
+    String controleProdutoOld;
+    String codigoVolumeNew;
+    Boolean existeRegistro;
+
+    @Override
+    public void doAction(ContextoAcao contexto) throws Exception {
+        ArrayList<BigDecimal> numeroNotaAtualizada = new ArrayList<>();
+        Registro[] linhas = contexto.getLinhas();
+        codigoProdutoOld = new BigDecimal(contexto.getParam("CODPRODOLD").toString());
+        codigoProdutoNew = new BigDecimal(contexto.getParam("CODPRODNEW").toString());
+        quantidadeProporcao = new BigDecimal(contexto.getParam("QTDPROPORCAO").toString());
+
+        if (codigoProdutoNew.equals(BigDecimal.ZERO)) {
+            contexto.mostraErro("Não existe produto de código 0. Verifique!");
+            return;
+        }
+
+        codigoVolumeNew = obterCodigoVolume(codigoProdutoNew);
+
+        for (Registro linha : linhas) {
+            BigDecimal numeroNota = (BigDecimal) linha.getCampo("NUNOTA");
+
+            sequenciaOld = obterSequencia(codigoProdutoOld, numeroNota);
+            if (!existeRegistro || sequenciaOld.equals(BigDecimal.ZERO)) {
+                continue;
+            }
+
+            quantidadeProdutoOld = obterQuantidade(codigoProdutoOld, numeroNota);
+            controleProdutoOld = obterControle(codigoProdutoOld, numeroNota);
+            quantidadeProdutoNew = quantidadeProdutoOld.multiply(quantidadeProporcao);
+
+            excluirProdutoDaNota(numeroNota, sequenciaOld, codigoProdutoOld);
+            incluirNovosProdutoNasNotas(codigoProdutoNew, quantidadeProdutoNew, controleProdutoOld, codigoVolumeNew, numeroNota);
+            numeroNotaAtualizada.add(numeroNota);
+        }
+
+        if (!numeroNotaAtualizada.isEmpty()) {
+            contexto.setMensagemRetorno("Produto " + codigoProdutoNew + ", controle " + controleProdutoOld + ", volume " + codigoVolumeNew + " incluído com sucesso.");
+        } else {
+            contexto.setMensagemRetorno("Nenhum item com o produto " + codigoProdutoOld + " foi encontrado para troca.");
+        }
+    }
+
+    private BigDecimal obterSequencia(BigDecimal codigoProdutoOld, BigDecimal numeroNota) throws Exception {
+        DynamicVO produtosVO = ItemNotaDAO.findOne("CODPROD = ? AND NUNOTA = ?", codigoProdutoOld, numeroNota);
+        if (produtosVO != null) {
+            existeRegistro = true;
+            return produtosVO.asBigDecimal("SEQUENCIA");
+        } else {
+            existeRegistro = false;
+            return BigDecimal.ZERO;
+        }
+    }
+
+    private BigDecimal obterQuantidade(BigDecimal codigoProdutoOld, BigDecimal numeroNota) throws Exception {
+        DynamicVO produtosVO = ItemNotaDAO.findOne("CODPROD = ? AND NUNOTA = ?", codigoProdutoOld, numeroNota);
+        if (produtosVO != null) {
+            existeRegistro = true;
+            return produtosVO.asBigDecimal("QTDNEG");
+        } else {
+            existeRegistro = false;
+            return BigDecimal.ZERO;
+        }
+    }
+
+    private String obterControle(BigDecimal codigoProdutoOld, BigDecimal numeroNota) throws Exception {
+        DynamicVO produtosVO = ItemNotaDAO.findOne("CODPROD = ? AND NUNOTA = ?", codigoProdutoOld, numeroNota);
+        if (produtosVO != null) {
+            existeRegistro = true;
+            return produtosVO.asString("CONTROLE");
+        } else {
+            existeRegistro = false;
+            return null;
+        }
+    }
+
+    private String obterCodigoVolume(BigDecimal codigoProdutoNew) throws Exception {
+        DynamicVO produtoVO = ProdutoDAO.findOne("CODPROD = ?", codigoProdutoNew);
+        if (produtoVO != null) {
+            return produtoVO.asString("CODVOL");
+        } else throw new Exception("Não foi possível encontrar o CODVOL para o produto " + codigoProdutoNew);
+    }
+
+    private void excluirProdutoDaNota(BigDecimal numeroNota, BigDecimal sequenciaProdutoOld, BigDecimal codigoProdutoOld) throws Exception {
+        try {
+            ItemNotaDAO.deleteByCriteria("NUNOTA = ? AND SEQUENCIA = ? AND CODPROD = ?", numeroNota, sequenciaProdutoOld, codigoProdutoOld);
+        } catch (Exception e) {
+            throw new Exception("Erro ao excluir item da nota " + numeroNota + ": " + e.getMessage());
+        }
+    }
+
+    private void incluirNovosProdutoNasNotas(BigDecimal codigoProdutoNew, BigDecimal quantidadeProdutoNew, String controleProdutoOld, String codigoVolumeNew, BigDecimal numeroNota) throws Exception {
+        FluidCreateVO TGFITEFCVO = ItemNotaDAO.create();
+        TGFITEFCVO.set("CODPROD", codigoProdutoNew);
+        TGFITEFCVO.set("CONTROLE", controleProdutoOld);
+        TGFITEFCVO.set("QTDNEG", quantidadeProdutoNew);
+        TGFITEFCVO.set("CODVOL", codigoVolumeNew);
+        TGFITEFCVO.set("CODLOCALORIG", codigoLocal);
+        TGFITEFCVO.set("NUNOTA", numeroNota);
+        TGFITEFCVO.save();
+    }
+}
